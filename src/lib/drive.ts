@@ -1,8 +1,10 @@
-// Google Identity Services 토큰 + Drive appDataFolder 파일 접근.
-// 앱 전용 숨김 폴더라 사용자의 다른 드라이브 파일엔 접근하지 못한다(drive.appdata 스코프)
+// Google Identity Services 토큰 + Drive 파일 접근.
+// drive.file 스코프라 앱이 만든 파일/폴더에만 접근하고 사용자의 다른 파일엔 닿지 않는다
 
 const GIS_SRC = "https://accounts.google.com/gsi/client";
-const SCOPE = "https://www.googleapis.com/auth/drive.appdata";
+const SCOPE = "https://www.googleapis.com/auth/drive.file";
+const FOLDER_NAME = "링크박스";
+const FOLDER_MIME = "application/vnd.google-apps.folder";
 const FILE_NAME = "linkbox.json";
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
 const UPLOAD_API = "https://www.googleapis.com/upload/drive/v3";
@@ -118,36 +120,65 @@ function authHeaders(token: string): HeadersInit {
   return { Authorization: `Bearer ${token}` };
 }
 
-export type RemoteFile = { id: string; snapshot: RemoteSnapshot | null };
+export type RemoteFile = {
+  folderId: string | null;
+  fileId: string | null;
+  snapshot: RemoteSnapshot | null;
+};
 
-// appDataFolder에서 linkbox.json을 찾아 내용을 읽는다. 없으면 null
-export async function readRemoteFile(token: string): Promise<RemoteFile | null> {
-  const list = await fetch(
-    `${DRIVE_API}/files?spaces=appDataFolder&q=name='${FILE_NAME}'&fields=files(id)`,
+async function driveQuery(token: string, q: string): Promise<{ id: string }[]> {
+  const res = await fetch(
+    `${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id)&pageSize=10`,
     { headers: authHeaders(token) },
   );
-  if (!list.ok) throw new Error(`drive list ${list.status}`);
-  const { files } = (await list.json()) as { files?: { id: string }[] };
-  const file = files?.[0];
-  if (!file) return null;
-  const res = await fetch(`${DRIVE_API}/files/${file.id}?alt=media`, {
+  if (!res.ok) throw new Error(`drive list ${res.status}`);
+  const { files } = (await res.json()) as { files?: { id: string }[] };
+  return files ?? [];
+}
+
+// 드라이브의 "링크박스" 폴더에서 linkbox.json을 찾아 읽는다 — 없으면 해당 필드가 null
+export async function readRemoteFile(token: string): Promise<RemoteFile> {
+  const folderId =
+    (
+      await driveQuery(
+        token,
+        `name='${FOLDER_NAME}' and mimeType='${FOLDER_MIME}' and trashed=false`,
+      )
+    )[0]?.id ?? null;
+  if (!folderId) return { folderId: null, fileId: null, snapshot: null };
+  const fileId =
+    (
+      await driveQuery(token, `name='${FILE_NAME}' and '${folderId}' in parents and trashed=false`)
+    )[0]?.id ?? null;
+  if (!fileId) return { folderId, fileId: null, snapshot: null };
+  const res = await fetch(`${DRIVE_API}/files/${fileId}?alt=media`, {
     headers: authHeaders(token),
   });
   if (!res.ok) throw new Error(`drive get ${res.status}`);
   try {
-    const body = (await res.json()) as RemoteSnapshot;
-    return { id: file.id, snapshot: body };
+    return { folderId, fileId, snapshot: (await res.json()) as RemoteSnapshot };
   } catch {
-    return { id: file.id, snapshot: null };
+    return { folderId, fileId, snapshot: null };
   }
 }
 
+// 필요하면 "링크박스" 폴더와 파일을 만들고 내용을 쓴다 — id를 돌려줘 다음 tick이 재사용
 export async function writeRemoteFile(
   token: string,
-  fileId: string | null,
+  ids: { folderId: string | null; fileId: string | null },
   snapshot: RemoteSnapshot,
-): Promise<string> {
+): Promise<{ folderId: string; fileId: string }> {
   const body = JSON.stringify(snapshot);
+  let { folderId, fileId } = ids;
+  if (!folderId) {
+    const res = await fetch(`${DRIVE_API}/files`, {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: FOLDER_NAME, mimeType: FOLDER_MIME }),
+    });
+    if (!res.ok) throw new Error(`drive mkdir ${res.status}`);
+    folderId = ((await res.json()) as { id: string }).id;
+  }
   if (fileId) {
     const res = await fetch(`${UPLOAD_API}/files/${fileId}?uploadType=media`, {
       method: "PATCH",
@@ -155,9 +186,9 @@ export async function writeRemoteFile(
       body,
     });
     if (!res.ok) throw new Error(`drive update ${res.status}`);
-    return fileId;
+    return { folderId, fileId };
   }
-  const meta = JSON.stringify({ name: FILE_NAME, parents: ["appDataFolder"] });
+  const meta = JSON.stringify({ name: FILE_NAME, parents: [folderId] });
   const form = new FormData();
   form.append("metadata", new Blob([meta], { type: "application/json" }));
   form.append("file", new Blob([body], { type: "application/json" }));
@@ -167,6 +198,6 @@ export async function writeRemoteFile(
     body: form,
   });
   if (!res.ok) throw new Error(`drive create ${res.status}`);
-  const created = (await res.json()) as { id: string };
-  return created.id;
+  fileId = ((await res.json()) as { id: string }).id;
+  return { folderId, fileId };
 }

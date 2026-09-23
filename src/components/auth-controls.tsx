@@ -62,7 +62,7 @@ export function AuthControls({
         <div className="auth-popover">
           {connected ? (
             <>
-              <div className="auth-email">Google Drive에 동기화 중</div>
+              <div className="auth-email">Drive의 '링크박스' 폴더에 동기화 중</div>
               <div className={`sync-status ${syncStatus}`}>{statusLabel}</div>
               {syncStatus === "error" && (
                 <button type="button" className="auth-action" onClick={connect} disabled={busy}>
@@ -76,7 +76,8 @@ export function AuthControls({
           ) : (
             <>
               <p className="auth-note">
-                Google Drive의 앱 전용 폴더에 링크를 저장해 폰/PC가 같은 목록을 공유합니다.
+                Google Drive에 '링크박스' 폴더를 만들어 링크를 저장합니다. 폰/PC가 같은 파일을 읽고
+                씁니다.
               </p>
               <button type="button" className="auth-action" onClick={connect} disabled={busy}>
                 Google로 연결하기
