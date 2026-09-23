@@ -6,11 +6,9 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { AddLinkForm } from "@/components/add-link-form";
 import { AuthControls } from "@/components/auth-controls";
 import { LinkCard } from "@/components/link-card";
-import { DriveSession } from "@/lib/drive";
+import { GithubSession } from "@/lib/github";
 import { exportJson, parseImport, useLinks } from "@/lib/store";
 import { SyncEngine } from "@/lib/sync";
-
-const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
 
 function sharedUrlFrom(params: URLSearchParams): string {
   for (const key of ["url", "text", "title"]) {
@@ -46,13 +44,10 @@ function Home() {
   const [importOpen, setImportOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [syncPromptDismissed, setSyncPromptDismissed] = useState(true);
-  const [connecting, setConnecting] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const driveSession = useMemo(
-    () => (GOOGLE_CLIENT_ID ? new DriveSession(GOOGLE_CLIENT_ID) : null),
-    [],
-  );
+  const githubSession = useMemo(() => new GithubSession(), []);
 
   const SYNC_PROMPT_KEY = "linkbox:sync-prompt:v1";
 
@@ -61,41 +56,33 @@ function Home() {
     setSyncPromptDismissed(localStorage.getItem(SYNC_PROMPT_KEY) === "1");
   }, []);
 
-  const connectDrive = async () => {
-    if (!driveSession) return;
-    setConnecting(true);
-    const ok = await driveSession.signIn();
-    setConnecting(false);
-    if (ok) setConnected(true);
-  };
-
   const dismissSyncPrompt = () => {
     localStorage.setItem(SYNC_PROMPT_KEY, "1");
     setSyncPromptDismissed(true);
   };
 
-  // 이전에 동의한 세션이면 팝업 없이 조용히 연결을 복원한다
+  // 이전에 저장된 토큰이 있으면 바로 연결을 복원한다
   useEffect(() => {
     let alive = true;
-    driveSession?.restore().then((ok) => {
+    githubSession.restore().then((ok) => {
       if (alive && ok) setConnected(true);
     });
     return () => {
       alive = false;
     };
-  }, [driveSession]);
+  }, [githubSession]);
 
   // 연결되면 SyncEngine 장착. 해제하면 로컬 데이터는 그대로 두고 로컬 모드로 돌아간다
   useEffect(() => {
-    if (!driveSession || !connected) {
+    if (!connected) {
       attachEngine(null);
       return;
     }
-    const engine = new SyncEngine(() => driveSession.getToken(), engineHooks);
+    const engine = new SyncEngine(() => githubSession.getToken(), engineHooks);
     attachEngine(engine);
     engine.start();
     return () => engine.detach();
-  }, [driveSession, connected, engineHooks, attachEngine]);
+  }, [githubSession, connected, engineHooks, attachEngine]);
 
   useEffect(() => {
     if (activeTag && !allTags.includes(activeTag)) setActiveTag(null);
@@ -171,10 +158,12 @@ function Home() {
         </h1>
         <div className="header-actions">
           <AuthControls
-            session={driveSession}
+            session={githubSession}
             connected={connected}
             syncStatus={syncStatus}
             onSession={setConnected}
+            open={syncOpen}
+            onOpenChange={setSyncOpen}
           />
           <button type="button" className="icon-btn" onClick={doExport} title="JSON 내보내기">
             <Download size={16} />
@@ -201,20 +190,15 @@ function Home() {
         </div>
       </header>
 
-      {driveSession && !connected && !syncPromptDismissed && (
+      {!connected && !syncPromptDismissed && (
         <div className="sync-prompt">
           <p className="sync-prompt-text">
-            폰·PC에서 같은 링크를 보려면 Google Drive에 연결하세요. 이후 저장은 자동으로
-            동기화됩니다.
+            폰·PC에서 같은 링크를 보려면 GitHub 계정으로 연결하세요. 토큰 붙여넣기 한 번이면 이후
+            저장은 자동으로 동기화됩니다.
           </p>
           <div className="sync-prompt-actions">
-            <button
-              type="button"
-              className="auth-action"
-              onClick={connectDrive}
-              disabled={connecting}
-            >
-              {connecting ? "연결 중…" : "Google로 연결하기"}
+            <button type="button" className="auth-action" onClick={() => setSyncOpen(true)}>
+              GitHub로 연결하기
             </button>
             <button type="button" className="auth-action ghost" onClick={dismissSyncPrompt}>
               나중에
