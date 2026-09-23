@@ -187,6 +187,16 @@ button {
   cursor: not-allowed;
 }
 
+.storage-error {
+  border: 1px solid var(--danger);
+  border-radius: 9px;
+  color: var(--danger);
+  background: rgba(240, 116, 116, 0.08);
+  font-size: 13px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+
 .toolbar {
   display: flex;
   gap: 10px;

@@ -2,7 +2,7 @@
 
 import { Download, Link2, Search, Upload } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { AddLinkForm } from "@/components/add-link-form";
 import { LinkCard } from "@/components/link-card";
 import { exportJson, parseImport, useLinks } from "@/lib/store";
@@ -21,10 +21,24 @@ function Home() {
   const searchParams = useSearchParams();
   const sharedUrl = useMemo(() => sharedUrlFrom(searchParams), [searchParams]);
 
-  const { items, hydrated, allTags, add, remove, togglePin, editMemo, replaceAll } = useLinks();
+  const {
+    items,
+    hydrated,
+    allTags,
+    storageError,
+    add,
+    remove,
+    togglePin,
+    editMemo,
+    mergeImported,
+  } = useLinks();
   const [query, setQuery] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (activeTag && !allTags.includes(activeTag)) setActiveTag(null);
+  }, [allTags, activeTag]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -50,10 +64,8 @@ function Home() {
   const doImport = async (file: File) => {
     try {
       const imported = parseImport(await file.text());
-      const existing = new Set(items.map((i) => i.url));
-      const fresh = imported.filter((i) => !existing.has(i.url));
-      replaceAll([...items, ...fresh]);
-      alert(`${fresh.length}개 링크를 가져왔습니다`);
+      const added = mergeImported(imported);
+      alert(`${added}개 링크를 가져왔습니다`);
     } catch {
       alert("파일을 읽지 못했습니다. 내보내기한 JSON 파일인지 확인해주세요.");
     }
@@ -96,6 +108,13 @@ function Home() {
       </header>
 
       <AddLinkForm key={sharedUrl} initialUrl={sharedUrl} onAdd={add} />
+
+      {storageError && (
+        <div className="storage-error">
+          브라우저 저장 공간이 부족하거나 차단되어 저장되지 않았습니다. 내보내기로 백업 후 일부를
+          지워주세요.
+        </div>
+      )}
 
       <div className="toolbar">
         <div style={{ position: "relative", flex: 1, display: "flex", alignItems: "center" }}>
