@@ -2,6 +2,7 @@
 
 import { Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { suggestTags } from "@/lib/categorize";
 import type { LinkDraft } from "@/lib/store";
 
 type Metadata = {
@@ -44,6 +45,9 @@ export function AddLinkForm({
   const memoRef = useRef<HTMLTextAreaElement>(null);
   const requestId = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  // 사용자가 태그를 직접 고치면 자동완성으로 덮어쓰지 않는다
+  const tagsEdited = useRef(false);
+  const autoFilled = useRef(false);
 
   const fetchMetadata = useCallback(async (normalized: string, signal: AbortSignal) => {
     const id = ++requestId.current;
@@ -86,6 +90,28 @@ export function AddLinkForm({
     if (initialUrl) memoRef.current?.focus();
   }, [initialUrl]);
 
+  // URL/제목이 준비되면 태그를 자동으로 제안한다 — 사용자가 건드린 적 없을 때만
+  useEffect(() => {
+    if (tagsEdited.current) return;
+    const normalized = normalizeUrl(url);
+    if (!normalized) {
+      if (autoFilled.current) {
+        autoFilled.current = false;
+        setTags("");
+      }
+      return;
+    }
+    const title =
+      fetchState.status === "ok" && fetchState.requestedUrl === normalized
+        ? fetchState.data.title
+        : "";
+    const suggested = suggestTags(normalized, title);
+    if (suggested.length) {
+      autoFilled.current = true;
+      setTags(suggested.join(", "));
+    }
+  }, [url, fetchState]);
+
   const canSave = normalizeUrl(url) !== null;
 
   const submit = () => {
@@ -111,6 +137,8 @@ export function AddLinkForm({
     setMemo("");
     setTags("");
     setFetchState({ status: "idle" });
+    tagsEdited.current = false;
+    autoFilled.current = false;
   };
 
   return (
@@ -155,9 +183,12 @@ export function AddLinkForm({
       <div className="form-row">
         <input
           type="text"
-          placeholder="태그 (쉼표로 구분, 예: ai, 도구)"
+          placeholder="태그 (쉼표로 구분 — 링크를 넣으면 자동 제안)"
           value={tags}
-          onChange={(e) => setTags(e.target.value)}
+          onChange={(e) => {
+            tagsEdited.current = true;
+            setTags(e.target.value);
+          }}
         />
         <button type="submit" className="primary-btn" disabled={!canSave}>
           <Plus size={16} style={{ verticalAlign: "-3px", marginRight: 4 }} />
