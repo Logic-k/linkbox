@@ -58,6 +58,7 @@ export class SyncEngine {
   private interval: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private queued = false;
+  private folderId: string | null = null;
   private fileId: string | null = null;
   private detachFns: (() => void)[] = [];
 
@@ -105,13 +106,19 @@ export class SyncEngine {
       if (!token) throw new Error("no token");
       const env = this.hooks.readEnvelope();
       const remote = await readRemoteFile(token);
-      if (remote) this.fileId = remote.id;
-      const merged = mergeSnapshot(env.items, env.deleted, remote?.snapshot ?? null);
-      if (snapshotDiffers(merged, remote?.snapshot ?? null)) {
-        this.fileId = await writeRemoteFile(token, this.fileId, {
-          items: merged.items,
-          deleted: merged.deleted,
-        });
+      this.folderId = remote.folderId;
+      this.fileId = remote.fileId;
+      const merged = mergeSnapshot(env.items, env.deleted, remote.snapshot);
+      // 원격 파일이 없거나 내용이 다르면 폴더와 함께 새로 쓴다 — 첫 연결 시
+      // "링크박스" 폴더가 드라이브에 눈에 보이게 생성된다
+      if (remote.snapshot === null || snapshotDiffers(merged, remote.snapshot)) {
+        const ids = await writeRemoteFile(
+          token,
+          { folderId: this.folderId, fileId: this.fileId },
+          { items: merged.items, deleted: merged.deleted },
+        );
+        this.folderId = ids.folderId;
+        this.fileId = ids.fileId;
       }
       this.hooks.writeMerged(merged);
       this.hooks.setStatus("synced");
