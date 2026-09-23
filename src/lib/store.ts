@@ -27,6 +27,15 @@ export type LinkDraft = {
 
 const STORAGE_KEY = "linkbox:items:v1";
 
+function isLinkItem(item: unknown): item is LinkItem {
+  return (
+    typeof item === "object" &&
+    item !== null &&
+    typeof (item as LinkItem).id === "string" &&
+    typeof (item as LinkItem).url === "string"
+  );
+}
+
 function load(): LinkItem[] {
   if (typeof window === "undefined") return [];
   try {
@@ -34,20 +43,19 @@ function load(): LinkItem[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item): item is LinkItem =>
-        typeof item === "object" &&
-        item !== null &&
-        typeof item.id === "string" &&
-        typeof item.url === "string",
-    );
+    return parsed.filter(isLinkItem);
   } catch {
     return [];
   }
 }
 
-function persist(items: LinkItem[]) {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+function persist(items: LinkItem[]): boolean {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function createId(): string {
@@ -57,22 +65,38 @@ function createId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// localStorage의 최신 값과 메모리 상태를 합친다 — 다른 탭이 쓴 항목과
+// 아직 저장되지 못한 항목이 둘 다 살아있도록
+function latest(current: LinkItem[]): LinkItem[] {
+  const persisted = load();
+  if (persisted.length === 0) return current;
+  const ids = new Set(persisted.map((i) => i.id));
+  return [...persisted, ...current.filter((i) => !ids.has(i.id))];
+}
+
 export function useLinks() {
   const [items, setItems] = useState<LinkItem[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  const [storageError, setStorageError] = useState(false);
 
   useEffect(() => {
     setItems(load());
     setHydrated(true);
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === STORAGE_KEY || e.key === null) setItems(load());
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  const update = useCallback((next: LinkItem[] | ((prev: LinkItem[]) => LinkItem[])) => {
-    setItems((prev) => {
-      const resolved = typeof next === "function" ? next(prev) : next;
-      persist(resolved);
-      return resolved;
-    });
-  }, []);
+  const update = useCallback(
+    (mutate: (prev: LinkItem[]) => LinkItem[]) => {
+      const resolved = mutate(latest(items));
+      setStorageError(!persist(resolved));
+      setItems(resolved);
+    },
+    [items],
+  );
 
   const add = useCallback(
     (draft: LinkDraft) => {
@@ -111,11 +135,17 @@ export function useLinks() {
     [update],
   );
 
-  const replaceAll = useCallback(
-    (next: LinkItem[]) => {
-      update(next);
+  const mergeImported = useCallback(
+    (imported: LinkItem[]): number => {
+      const base = latest(items);
+      const existing = new Set(base.map((i) => i.url));
+      const fresh = imported.filter((i) => !existing.has(i.url));
+      const next = [...base, ...fresh];
+      setStorageError(!persist(next));
+      setItems(next);
+      return fresh.length;
     },
-    [update],
+    [items],
   );
 
   const allTags = useMemo(() => {
@@ -132,7 +162,17 @@ export function useLinks() {
     [items],
   );
 
-  return { items: sorted, hydrated, allTags, add, remove, togglePin, editMemo, replaceAll };
+  return {
+    items: sorted,
+    hydrated,
+    allTags,
+    storageError,
+    add,
+    remove,
+    togglePin,
+    editMemo,
+    mergeImported,
+  };
 }
 
 export function exportJson(items: LinkItem[]): string {
@@ -143,21 +183,16 @@ export function parseImport(text: string): LinkItem[] {
   const parsed = JSON.parse(text);
   const list = Array.isArray(parsed) ? parsed : parsed?.items;
   if (!Array.isArray(list)) throw new Error("형식이 올바르지 않습니다");
-  return list
-    .filter(
-      (item): item is LinkItem =>
-        typeof item === "object" && item !== null && typeof item.url === "string",
-    )
-    .map((item) => ({
-      id: typeof item.id === "string" ? item.id : createId(),
-      url: item.url,
-      title: typeof item.title === "string" ? item.title : item.url,
-      memo: typeof item.memo === "string" ? item.memo : "",
-      tags: Array.isArray(item.tags) ? item.tags.filter((t) => typeof t === "string") : [],
-      image: typeof item.image === "string" ? item.image : undefined,
-      favicon: typeof item.favicon === "string" ? item.favicon : undefined,
-      siteName: typeof item.siteName === "string" ? item.siteName : undefined,
-      pinned: Boolean(item.pinned),
-      createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
-    }));
+  return list.filter(isLinkItem).map((item) => ({
+    id: item.id,
+    url: item.url,
+    title: typeof item.title === "string" ? item.title : item.url,
+    memo: typeof item.memo === "string" ? item.memo : "",
+    tags: Array.isArray(item.tags) ? item.tags.filter((t) => typeof t === "string") : [],
+    image: typeof item.image === "string" ? item.image : undefined,
+    favicon: typeof item.favicon === "string" ? item.favicon : undefined,
+    siteName: typeof item.siteName === "string" ? item.siteName : undefined,
+    pinned: Boolean(item.pinned),
+    createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
+  }));
 }

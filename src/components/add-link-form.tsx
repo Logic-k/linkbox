@@ -16,7 +16,7 @@ type Metadata = {
 type FetchState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "ok"; data: Metadata }
+  | { status: "ok"; data: Metadata; requestedUrl: string }
   | { status: "error"; message: string };
 
 function normalizeUrl(input: string): string | null {
@@ -43,34 +43,43 @@ export function AddLinkForm({
   const [fetchState, setFetchState] = useState<FetchState>({ status: "idle" });
   const memoRef = useRef<HTMLTextAreaElement>(null);
   const requestId = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
 
-  const fetchMetadata = useCallback(async (normalized: string) => {
+  const fetchMetadata = useCallback(async (normalized: string, signal: AbortSignal) => {
     const id = ++requestId.current;
     setFetchState({ status: "loading" });
     try {
-      const res = await fetch(`/api/metadata?url=${encodeURIComponent(normalized)}`);
+      const res = await fetch(`/api/metadata?url=${encodeURIComponent(normalized)}`, { signal });
       const json = await res.json();
       if (id !== requestId.current) return;
       if (!res.ok) {
         setFetchState({ status: "error", message: json.error ?? "불러오기 실패" });
       } else {
-        setFetchState({ status: "ok", data: json });
+        setFetchState({ status: "ok", data: json, requestedUrl: normalized });
       }
     } catch {
-      if (id === requestId.current) {
+      if (id === requestId.current && !signal.aborted) {
         setFetchState({ status: "error", message: "네트워크 오류" });
       }
     }
   }, []);
 
   useEffect(() => {
+    // 입력이 바뀌면 진행 중인 요청을 즉시 무효화 — 이전 URL의 결과가 남지 않도록
+    abortRef.current?.abort();
+    requestId.current += 1;
     const normalized = normalizeUrl(url);
     if (!normalized) {
       setFetchState({ status: "idle" });
       return;
     }
-    const timer = setTimeout(() => fetchMetadata(normalized), 500);
-    return () => clearTimeout(timer);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const timer = setTimeout(() => fetchMetadata(normalized, controller.signal), 500);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [url, fetchMetadata]);
 
   useEffect(() => {
@@ -82,7 +91,10 @@ export function AddLinkForm({
   const submit = () => {
     const normalized = normalizeUrl(url);
     if (!normalized) return;
-    const meta = fetchState.status === "ok" ? fetchState.data : undefined;
+    const meta =
+      fetchState.status === "ok" && fetchState.requestedUrl === normalized
+        ? fetchState.data
+        : undefined;
     onAdd({
       url: normalized,
       title: meta?.title ?? new URL(normalized).hostname,
@@ -115,7 +127,6 @@ export function AddLinkForm({
         value={url}
         onChange={(e) => setUrl(e.target.value)}
         autoComplete="off"
-        // biome-ignore lint/a11y/noAutofocus: 데스크톱에서 바로 붙여넣기용
         autoFocus
       />
 
@@ -124,10 +135,7 @@ export function AddLinkForm({
       )}
       {fetchState.status === "ok" && (
         <div className="fetch-preview">
-          {fetchState.data.favicon && (
-            // biome-ignore lint/performance/noImgElement: 외부 파비콘은 최적화 불필요
-            <img src={fetchState.data.favicon} alt="" />
-          )}
+          {fetchState.data.favicon && <img src={fetchState.data.favicon} alt="" />}
           <span className="preview-title">{fetchState.data.title}</span>
         </div>
       )}

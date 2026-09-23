@@ -43,10 +43,8 @@ export function LinkCard({
     <article className={`card${item.pinned ? " pinned" : ""}`}>
       <div className="thumb">
         {item.image ? (
-          // biome-ignore lint/performance/noImgElement: 외부 썸네일은 최적화 불필요
           <img src={item.image} alt="" />
         ) : item.favicon ? (
-          // biome-ignore lint/performance/noImgElement: 외부 파비콘은 최적화 불필요
           <img className="favicon" src={item.favicon} alt="" />
         ) : (
           <Link2 size={22} color="var(--text-dim)" />
@@ -78,7 +76,6 @@ export function LinkCard({
                 setEditing(false);
               }
             }}
-            // biome-ignore lint/a11y/noAutofocus: 클릭으로만 진입하는 편집 필드
             autoFocus
             rows={2}
           />
