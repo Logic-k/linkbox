@@ -128,7 +128,7 @@ export type RemoteFile = {
 
 async function driveQuery(token: string, q: string): Promise<{ id: string }[]> {
   const res = await fetch(
-    `${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id)&pageSize=10`,
+    `${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id)&pageSize=10&orderBy=createdTime`,
     { headers: authHeaders(token) },
   );
   if (!res.ok) throw new Error(`drive list ${res.status}`);
