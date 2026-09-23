@@ -1,9 +1,9 @@
-import { type RemoteSnapshot, readRemoteFile, writeRemoteFile } from "./drive";
+import { type RemoteSnapshot, readRemoteFile, writeRemoteFile } from "./github";
 import type { LinkItem, Snapshot } from "./store";
 
 export type SyncStatus = "off" | "syncing" | "synced" | "error";
 
-// Drive 파일 전체 스냅샷과 로컬을 id별 최신값으로 병합한다.
+// Gist의 전체 스냅샷과 로컬을 id별 최신값으로 병합한다.
 // tombstone(deleted)이 항목보다 새로우면 항목은 제거 = 다른 기기의 삭제 전파
 export function mergeSnapshot(
   localItems: LinkItem[],
@@ -51,7 +51,7 @@ export type EngineHooks = {
   setStatus: (status: SyncStatus) => void;
 };
 
-// 풀-기반 동기화: Drive 파일을 읽어 병합하고 달라졌으면 통째로 다시 쓴다.
+// 풀-기반 동기화: Gist를 읽어 병합하고 달라졌으면 통째로 다시 쓴다.
 // 파일 단위 덮어쓰기여도 병합이 항목별 LWW라 경쟁 시에도 최신값으로 수렴한다
 export class SyncEngine {
   private timer: ReturnType<typeof setTimeout> | null = null;

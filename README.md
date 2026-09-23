@@ -40,21 +40,19 @@ npm run dev            # http://localhost:3000
 
 Vercel에 그대로 올리면 됩니다 (Next.js + API route 1개, 외부 서비스 없음). 배포 후 폰 브라우저에서 "홈 화면에 추가"하면 공유 타겟으로 등록됩니다.
 
-## 동기화 (선택, Google Drive)
+## 동기화 (선택, GitHub)
 
-폰/PC 간 자동 동기화는 본인 Google Drive에 자동 생성되는 **"링크박스" 폴더**의 `linkbox.json`으로 이뤄집니다 — 별도 DB/서버가 없고 데이터가 내 드라이브에 남습니다(`drive.file` 스코프라 앱이 만든 파일만 접근합니다). env가 없으면 앱은 자동으로 로컬 전용 모드가 되어 동기화 버튼이 표시되지 않습니다.
+폰/PC 간 자동 동기화는 본인 GitHub 계정의 **비공개 Gist**에 저장되는 `linkbox.json`으로 이뤄집니다 — 별도 DB/서버가 없고, 토큰은 각 기기의 브라우저 저장소에만 남습니다.
 
-**설정 (Google Cloud에서 한 번):**
+**설정 (기기마다 한 번, 약 30초):**
 
-1. https://console.cloud.google.com 에서 프로젝트 생성(또는 기존 프로젝트 사용)
-2. "API 및 서비스" → "라이브러리"에서 **Google Drive API** 검색 후 사용 설정
-3. "OAuth 동의 화면": External → 앱 이름만 입력 → 저장. "테스트 사용자"에 본인 Gmail 추가
-4. "사용자 인증 정보" → "사용자 인증 정보 만들기" → **OAuth 클라이언트 ID** → 애플리케이션 유형 "웹 애플리케이션"
-5. 승인된 JavaScript 원본에 배포 주소 추가 (예: `https://linkbox.vercel.app`, 로컬 개발은 `http://localhost:3000`)
-6. 생성된 클라이언트 ID를 Vercel env `NEXT_PUBLIC_GOOGLE_CLIENT_ID`로 등록 → 재배포
+1. 앱 헤더의 "GitHub 동기화" 또는 첫 접속 배너의 "GitHub로 연결하기" 클릭
+2. "토큰 만들기" 링크 클릭 → GitHub에서 Personal access token 생성 (`gist` 권한만 체크)
+3. 발급된 토큰을 앱 입력칸에 붙여넣기 → "토큰으로 연결하기"
 
-이후 앱 헤더의 "Drive 동기화" → "Google로 연결하기"로 연결하면 끝입니다. 동기화 방식: 전체 스냅샷을 주기(60초)·변경·포커스 시 읽어 `updatedAt` 최신값(LWW)으로 항목별 병합, 삭제는 `deleted` tombstone으로 전파됩니다.
+이후 저장은 자동으로 동기화됩니다. 동기화 방식: 전체 스냅샷을 주기(60초)·변경·포커스 시 읽어 `updatedAt` 최신값(LWW)으로 항목별 병합, 삭제는 `deleted` tombstone으로 전파됩니다.
+
 
 ## 스택
 
-Next.js (App Router) · React 19 · TypeScript · Biome · lucide-react · CSS variables · Google Drive 연동 (선택)
+Next.js (App Router) · React 19 · TypeScript · Biome · lucide-react · CSS variables · GitHub Gist 연동 (선택)
