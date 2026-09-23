@@ -1,5 +1,7 @@
-import { promises as dns } from "node:dns";
+import { promises as dns, lookup } from "node:dns";
+import type { LookupFunction } from "node:net";
 import { NextResponse } from "next/server";
+import { Agent, type Response as UndiciResponse, fetch as undiciFetch } from "undici";
 
 const FETCH_TIMEOUT_MS = 8000;
 const MAX_BYTES = 512 * 1024;
@@ -64,34 +66,75 @@ function isPrivateHost(hostname: string): boolean {
   if (host.startsWith("::ffff:")) host = host.slice(7); // IPv4-mapped IPv6
   const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (ipv4) {
-    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
+    const [a, b, c] = [Number(ipv4[1]), Number(ipv4[2]), Number(ipv4[3])];
     return (
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 198 && (b === 18 || b === 19)) ||
-      a >= 224
+      a === 0 || // "이 네트워크"
+      a === 10 || // RFC1918
+      a === 127 || // 루프백
+      (a === 100 && b >= 64 && b <= 127) || // CGNAT
+      (a === 169 && b === 254) || // 링크-로컬
+      (a === 172 && b >= 16 && b <= 31) || // RFC1918
+      (a === 192 && b === 168) || // RFC1918
+      (a === 192 && b === 0 && c === 0) || // IETF 프로토콜 할당
+      (a === 192 && b === 0 && c === 2) || // TEST-NET-1
+      (a === 192 && b === 88 && c === 99) || // 6to4 릴레이 애니캐스트
+      (a === 198 && (b === 18 || b === 19)) || // 벤치마크
+      (a === 198 && b === 51 && c === 100) || // TEST-NET-2
+      (a === 203 && b === 0 && c === 113) || // TEST-NET-3
+      a >= 224 // 멀티캐스트·예약·브로드캐스트
     );
   }
   if (!host.includes(":")) return false;
-  const first = host.split(":")[0];
-  return host === "::1" || host === "::" || /^fe[89ab]/.test(first) || /^f[cd]/.test(first);
+  if (host === "::" || host === "::1") return true;
+  const groups = host.split(":");
+  const first = groups[0];
+  const second = groups[1] ?? "";
+  return (
+    /^fe[89ab]/.test(first) || // fe80::/10 링크-로컬
+    /^f[cd]/.test(first) || // fc00::/7 ULA
+    first.startsWith("ff") || // ff00::/8 멀티캐스트
+    first === "2002" || // 6to4
+    (first === "64" && second === "ff9b") || // NAT64
+    (first === "100" && (second === "" || /^0+$/.test(second))) || // discard-only 100::/64
+    (first === "2001" &&
+      (/^0+$/.test(second) || // Teredo 2001::/32
+        second === "2" || // 벤치마크 2001:2::/48
+        second === "10" || // ORCHIDv1
+        second === "20" || // ORCHIDv2
+        second === "db8")) // 문서용 2001:db8::/32
+  );
 }
 
-// DNS 별칭이 내부 주소로 해석되는 경우 차단 (조회 시점 이후의 재바인딩까지는 막지 못함)
+// DNS 별칭이 내부 주소로 해석되는 경우 차단 — 사전 검증용
+// (실제 연결 시점에는 아래 guardedLookup이 같은 검사를 다시 수행)
 async function resolvesToPrivate(hostname: string): Promise<boolean> {
   try {
-    const records = await dns.lookup(hostname, { all: true, verbatim: true });
+    const records = await dns.lookup(hostname.replace(/^\[|\]$/g, ""), {
+      all: true,
+      verbatim: true,
+    });
     if (records.length === 0) return true;
     return records.some((record) => isPrivateHost(record.address));
   } catch {
     return true; // 조회 실패 시 요청도 실패하므로 차단 쪽이 안전
   }
 }
+
+// 검증 통과 후 소켓이 실제 연결되는 시점에 DNS가 내부로 재바인딩되는 것을 막기 위해
+// 커넥터의 lookup에서도 동일한 비공인 주소 검사를 수행한다
+const guardedLookup: LookupFunction = (hostname, options, callback) => {
+  lookup(hostname, { ...options, all: true }, (err, records) => {
+    if (err) return callback(err, "", 0);
+    const hits = records ?? [];
+    if (hits.length === 0 || hits.some((record) => isPrivateHost(record.address))) {
+      return callback(new Error("hostname resolves to a non-public address"), "", 0);
+    }
+    if (options.all) return callback(null, hits, 0);
+    return callback(null, hits[0].address, hits[0].family);
+  });
+};
+
+const dispatcher = new Agent({ connect: { lookup: guardedLookup } });
 
 const PRIVATE_HOST_ERROR = "내부 주소는 가져올 수 없습니다";
 
@@ -121,9 +164,10 @@ export async function GET(request: Request) {
 
   try {
     // 리다이렉트를 수동으로 따라가며 매 홉의 대상을 다시 검증한다
-    let response: Response | null = null;
+    let response: UndiciResponse | null = null;
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-      const res = await fetch(target, {
+      const res = await undiciFetch(target, {
+        dispatcher,
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         redirect: "manual",
         headers: {

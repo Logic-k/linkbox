@@ -20,6 +20,9 @@ importers:
       react-dom:
         specifier: ^19.2.3
         version: 19.3.0(react@19.3.0)
+      undici:
+        specifier: 7.29.1
+        version: 7.29.1
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.3.9
@@ -440,6 +443,10 @@ packages:
   undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
 
+  undici@7.29.1:
+    resolution: {integrity: sha512-RYONW2MeafgYlkVOKYKkA/Ag7BmXqgIWCa8t1m0JcxrQg9pI9lEqRhAOruOBCbAohOa/gkCF+iPi9hrgvTzu6Q==}
+    engines: {node: '>=20.18.1'}
+
 snapshots:
 
   '@biomejs/biome@2.5.14':
@@ -739,3 +746,5 @@ snapshots:
   typescript@5.9.3: {}
 
   undici-types@7.18.2: {}
+
+  undici@7.29.1: {}
