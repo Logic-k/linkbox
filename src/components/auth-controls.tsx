@@ -1,56 +1,50 @@
 "use client";
 
-import type { Session } from "@supabase/supabase-js";
 import { Cloud, CloudOff, Loader2, LogOut } from "lucide-react";
 import { useState } from "react";
-import { supabase } from "@/lib/supabase";
+import type { DriveSession } from "@/lib/drive";
 import type { SyncStatus } from "@/lib/sync";
 
 const STATUS_LABEL: Record<SyncStatus, string> = {
-  off: "로컬",
+  off: "동기화 꺼짐",
   syncing: "동기화 중…",
   synced: "동기화됨",
-  error: "동기화 실패",
+  error: "동기화 오류",
 };
 
 export function AuthControls({
   session,
+  connected,
   syncStatus,
+  onSession,
 }: {
-  session: Session | null;
+  session: DriveSession | null;
+  connected: boolean;
   syncStatus: SyncStatus;
+  onSession: (connected: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Supabase env가 없으면 로컬 전용 모드 — 버튼 자체를 숨긴다
-  if (!supabase) return null;
-  const client = supabase;
+  // GOOGLE_CLIENT_ID env가 없으면 로컬 전용 모드 — 버튼 자체를 숨긴다
+  if (!session) return null;
 
-  const sendMagicLink = async () => {
-    const trimmed = email.trim();
-    if (!trimmed) return;
+  const connect = async () => {
     setBusy(true);
     setError(null);
-    const { error: err } = await client.auth.signInWithOtp({
-      email: trimmed,
-      options: { emailRedirectTo: window.location.origin },
-    });
+    const ok = await session.signIn();
     setBusy(false);
-    if (err) setError("전송에 실패했습니다. 이메일을 확인해주세요");
-    else setSent(true);
+    if (!ok) {
+      setError("연결에 실패했습니다. 다시 시도해주세요");
+      return;
+    }
+    onSession(true);
   };
 
-  const signInGoogle = async () => {
-    setBusy(true);
-    await client.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: window.location.origin },
-    });
-    setBusy(false);
+  const disconnect = async () => {
+    await session.signOut();
+    onSession(false);
   };
 
   const statusLabel = STATUS_LABEL[syncStatus];
@@ -61,45 +55,31 @@ export function AuthControls({
     <div className="auth-controls">
       <button type="button" className="sync-button" onClick={() => setOpen((v) => !v)}>
         <StatusIcon size={15} className={syncStatus === "syncing" ? "spin" : undefined} />
-        {session ? statusLabel : "로그인·동기화"}
+        {connected ? statusLabel : "Drive 동기화"}
       </button>
 
       {open && (
         <div className="auth-popover">
-          {session ? (
+          {connected ? (
             <>
-              <div className="auth-email">{session.user.email}</div>
+              <div className="auth-email">Google Drive에 동기화 중</div>
               <div className={`sync-status ${syncStatus}`}>{statusLabel}</div>
-              <button type="button" className="auth-action" onClick={() => client.auth.signOut()}>
-                <LogOut size={14} /> 로그아웃
+              {syncStatus === "error" && (
+                <button type="button" className="auth-action" onClick={connect} disabled={busy}>
+                  다시 연결
+                </button>
+              )}
+              <button type="button" className="auth-action" onClick={disconnect}>
+                <LogOut size={14} /> 연결 해제
               </button>
             </>
-          ) : sent ? (
-            <p className="auth-note">메일함을 확인해 로그인 링크를 눌러주세요.</p>
           ) : (
             <>
-              <input
-                type="email"
-                placeholder="이메일 주소"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && sendMagicLink()}
-              />
-              <button
-                type="button"
-                className="auth-action"
-                onClick={sendMagicLink}
-                disabled={busy || !email.trim()}
-              >
-                로그인 링크 보내기
-              </button>
-              <button
-                type="button"
-                className="auth-action ghost"
-                onClick={signInGoogle}
-                disabled={busy}
-              >
-                Google로 계속하기
+              <p className="auth-note">
+                Google Drive의 앱 전용 폴더에 링크를 저장해 폰/PC가 같은 목록을 공유합니다.
+              </p>
+              <button type="button" className="auth-action" onClick={connect} disabled={busy}>
+                Google로 연결하기
               </button>
               {error && <p className="auth-error">{error}</p>}
             </>

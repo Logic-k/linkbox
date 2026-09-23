@@ -40,21 +40,21 @@ npm run dev            # http://localhost:3000
 
 Vercel에 그대로 올리면 됩니다 (Next.js + API route 1개, 외부 서비스 없음). 배포 후 폰 브라우저에서 "홈 화면에 추가"하면 공유 타겟으로 등록됩니다.
 
-## 동기화 (선택, Supabase 무료 플랜)
+## 동기화 (선택, Google Drive)
 
-폰/PC 간 자동 동기화가 필요하면 Supabase를 붙입니다. env가 없으면 앱은 자동으로 로컬 전용 모드가 되어 로그인 버튼이 표시되지 않습니다.
+폰/PC 간 자동 동기화는 본인 Google Drive의 앱 전용 숨김 폴더(appDataFolder)에 링크를 JSON으로 저장해 이뤄집니다 — 별도 DB/서버가 없고 데이터가 내 드라이브에 남습니다. env가 없으면 앱은 자동으로 로컬 전용 모드가 되어 동기화 버튼이 표시되지 않습니다.
 
-1. https://supabase.com/dashboard 에서 새 프로젝트 생성 (무료)
-2. SQL Editor에서 `supabase/schema.sql` 실행 → `links` 테이블 + RLS 생성
-3. Settings → API에서 `Project URL`과 `anon public` 키를 복사
-4. 로컬: `.env.local` / Vercel: Project Settings → Environment Variables에 설정
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-5. Authentication → URL Configuration에서 사이트 URL과 Redirect URL에 배포 주소 추가 (기본 이메일 매직링크 로그인은 추가 설정 없이 동작)
-6. (선택) Google 로그인: Authentication → Providers → Google 활성화 후 Client ID/Secret 입력
+**설정 (Google Cloud에서 한 번):**
 
-동기화 방식: 기기별 `localStorage`가 우선 저장되고, 변경분(dirty 추적)만 Supabase와 `updated_at` 최신값(LWW) 병합. 삭제는 `deleted_at`으로 전파됩니다.
+1. https://console.cloud.google.com 에서 프로젝트 생성(또는 기존 프로젝트 사용)
+2. "API 및 서비스" → "라이브러리"에서 **Google Drive API** 검색 후 사용 설정
+3. "OAuth 동의 화면": External → 앱 이름만 입력 → 저장. "테스트 사용자"에 본인 Gmail 추가
+4. "사용자 인증 정보" → "사용자 인증 정보 만들기" → **OAuth 클라이언트 ID** → 애플리케이션 유형 "웹 애플리케이션"
+5. 승인된 JavaScript 원본에 배포 주소 추가 (예: `https://linkbox.vercel.app`, 로컬 개발은 `http://localhost:3000`)
+6. 생성된 클라이언트 ID를 Vercel env `NEXT_PUBLIC_GOOGLE_CLIENT_ID`로 등록 → 재배포
+
+이후 앱 헤더의 "Drive 동기화" → "Google로 연결하기"로 연결하면 끝입니다. 동기화 방식: 전체 스냅샷을 주기(60초)·변경·포커스 시 읽어 `updatedAt` 최신값(LWW)으로 항목별 병합, 삭제는 `deleted` tombstone으로 전파됩니다.
 
 ## 스택
 
-Next.js (App Router) · React 19 · TypeScript · Biome · lucide-react · CSS variables · Supabase (선택)
+Next.js (App Router) · React 19 · TypeScript · Biome · lucide-react · CSS variables · Google Drive 연동 (선택)
