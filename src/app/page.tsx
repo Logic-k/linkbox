@@ -43,6 +43,8 @@ function Home() {
   const [query, setQuery] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const driveSession = useMemo(
@@ -89,20 +91,47 @@ function Home() {
     });
   }, [items, query, activeTag]);
 
-  const doExport = () => {
-    const blob = new Blob([exportJson(items)], { type: "application/json" });
+  // 폰에서는 파일 다운로드가 불편해서, 공유 시트 → 클립보드 → 다운로드 순으로 시도한다
+  const doExport = async () => {
+    const json = exportJson(items);
+    const name = `linkbox-${new Date().toISOString().slice(0, 10)}.json`;
+    const file = new File([json], name, { type: "application/json" });
+    if (typeof navigator !== "undefined" && navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: "링크박스 백업" });
+        return;
+      } catch (e) {
+        if ((e as Error).name === "AbortError") return; // 사용자가 공유를 취소
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(json);
+      alert("JSON을 클립보드에 복사했습니다. 다른 기기에서 '가져오기 → 붙여넣기'로 넣으세요.");
+      return;
+    } catch {
+      // 클립보드도 막힌 환경이면 파일 다운로드로 폴백
+    }
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `linkbox-${new Date().toISOString().slice(0, 10)}.json`;
+    a.href = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+    a.download = name;
     a.click();
     URL.revokeObjectURL(a.href);
   };
 
-  const doImport = async (file: File) => {
+  const importItems = (text: string) => {
     try {
-      const imported = parseImport(await file.text());
-      const added = mergeImported(imported);
+      const added = mergeImported(parseImport(text));
       alert(`${added}개 링크를 가져왔습니다`);
+      setImportOpen(false);
+      setPasteText("");
+    } catch {
+      alert("JSON 형식이 올바르지 않습니다. 내보내기한 내용을 그대로 붙여넣어주세요.");
+    }
+  };
+
+  const doImportFile = async (file: File) => {
+    try {
+      importItems(await file.text());
     } catch {
       alert("파일을 읽지 못했습니다. 내보내기한 JSON 파일인지 확인해주세요.");
     }
@@ -131,8 +160,8 @@ function Home() {
           <button
             type="button"
             className="icon-btn"
-            onClick={() => fileRef.current?.click()}
-            title="JSON 가져오기"
+            onClick={() => setImportOpen(true)}
+            title="가져오기"
           >
             <Upload size={16} />
           </button>
@@ -143,12 +172,57 @@ function Home() {
             hidden
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) doImport(file);
+              if (file) doImportFile(file);
               e.target.value = "";
             }}
           />
         </div>
       </header>
+
+      {importOpen && (
+        <div className="paste-backdrop">
+          <button
+            type="button"
+            className="paste-close"
+            aria-label="가져오기 닫기"
+            onClick={() => setImportOpen(false)}
+          />
+          <div className="paste-modal" role="dialog" aria-modal="true" aria-label="링크 가져오기">
+            <p className="auth-note">다른 기기에서 복사한 JSON을 붙여넣거나 파일을 선택하세요.</p>
+            <textarea
+              className="paste-area"
+              placeholder='{"version":1, "items":[…]}'
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+              rows={6}
+            />
+            <div className="paste-actions">
+              <button
+                type="button"
+                className="auth-action"
+                onClick={() => importItems(pasteText)}
+                disabled={!pasteText.trim()}
+              >
+                붙여넣기로 가져오기
+              </button>
+              <button
+                type="button"
+                className="auth-action ghost"
+                onClick={() => fileRef.current?.click()}
+              >
+                파일 선택
+              </button>
+              <button
+                type="button"
+                className="auth-action ghost"
+                onClick={() => setImportOpen(false)}
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <AddLinkForm key={sharedUrl} initialUrl={sharedUrl} onAdd={add} />
 
