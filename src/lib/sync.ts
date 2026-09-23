@@ -1,92 +1,45 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
-import type { LinkItem, Snapshot, WriteMergedResult } from "./store";
+import { type RemoteSnapshot, readRemoteFile, writeRemoteFile } from "./drive";
+import type { LinkItem, Snapshot } from "./store";
 
 export type SyncStatus = "off" | "syncing" | "synced" | "error";
 
-type RemoteRow = {
-  id: string;
-  url: string;
-  title: string;
-  memo: string;
-  tags: string[];
-  image?: string;
-  favicon?: string;
-  site_name?: string;
-  pinned: boolean;
-  created_at: number;
-  updated_at: number;
-  deleted_at: number | null;
-};
-
-function toRow(userId: string, item: LinkItem, deletedAt: number | null) {
-  return {
-    id: item.id,
-    user_id: userId,
-    url: item.url,
-    title: item.title,
-    memo: item.memo,
-    tags: item.tags,
-    image: item.image ?? null,
-    favicon: item.favicon ?? null,
-    site_name: item.siteName ?? null,
-    pinned: item.pinned,
-    created_at: item.createdAt,
-    updated_at: item.updatedAt,
-    deleted_at: deletedAt,
-  };
-}
-
-function tombstoneRow(userId: string, id: string, ts: number) {
-  return {
-    id,
-    user_id: userId,
-    url: "",
-    title: "",
-    memo: "",
-    tags: [] as string[],
-    image: null,
-    favicon: null,
-    site_name: null,
-    pinned: false,
-    created_at: 0,
-    updated_at: ts,
-    deleted_at: ts,
-  };
-}
-
-function toItem(row: RemoteRow): LinkItem {
-  return {
-    id: row.id,
-    url: row.url,
-    title: row.title,
-    memo: row.memo,
-    tags: row.tags,
-    image: row.image ?? undefined,
-    favicon: row.favicon ?? undefined,
-    siteName: row.site_name ?? undefined,
-    pinned: row.pinned,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-// last-write-wins 병합: 같은 id는 updatedAt이 큰 쪽을 채택하고,
-// 원격 tombstone이 로컬보다 새로우면 로컬에서도 제거한다
-function mergeRemote(local: LinkItem[], remote: RemoteRow[]): LinkItem[] {
-  const byId = new Map(local.map((i) => [i.id, i]));
-  for (const row of remote) {
-    const l = byId.get(row.id);
-    const remoteTs = Math.max(row.updated_at, row.deleted_at ?? 0);
-    if (!l) {
-      if (row.deleted_at === null) byId.set(row.id, toItem(row));
-      continue;
-    }
-    if (remoteTs > l.updatedAt) {
-      if (row.deleted_at === null) byId.set(row.id, toItem(row));
-      else byId.delete(row.id);
-    }
+// Drive 파일 전체 스냅샷과 로컬을 id별 최신값으로 병합한다.
+// tombstone(deleted)이 항목보다 새로우면 항목은 제거 = 다른 기기의 삭제 전파
+export function mergeSnapshot(
+  localItems: LinkItem[],
+  localDeleted: Record<string, number>,
+  remote: RemoteSnapshot | null,
+): { items: LinkItem[]; deleted: Record<string, number> } {
+  const byId = new Map(localItems.map((i) => [i.id, i]));
+  const deleted: Record<string, number> = { ...localDeleted };
+  for (const raw of remote?.items ?? []) {
+    const item = raw as LinkItem;
+    const cur = byId.get(item.id);
+    if (!cur || item.updatedAt > cur.updatedAt) byId.set(item.id, item);
   }
-  return [...byId.values()];
+  for (const [id, ts] of Object.entries(remote?.deleted ?? {})) {
+    if (typeof ts === "number" && ts > (deleted[id] ?? 0)) deleted[id] = ts;
+  }
+  const items = [...byId.values()].filter((i) => (deleted[i.id] ?? 0) <= i.updatedAt);
+  return { items, deleted };
+}
+
+// 원격 스냅샷과 병합 결과가 다른지 비교 — 같으면 업로드를 건너뛴다
+function snapshotDiffers(
+  merged: { items: LinkItem[]; deleted: Record<string, number> },
+  remote: RemoteSnapshot | null,
+): boolean {
+  if (!remote) return merged.items.length > 0 || Object.keys(merged.deleted).length > 0;
+  const remoteItems = (remote.items ?? []) as LinkItem[];
+  if (remoteItems.length !== merged.items.length) return true;
+  const remoteById = new Map(remoteItems.map((i) => [i.id, i.updatedAt]));
+  for (const item of merged.items) {
+    if (remoteById.get(item.id) !== item.updatedAt) return true;
+  }
+  const rd = remote.deleted ?? {};
+  const ld = merged.deleted;
+  if (Object.keys(rd).length !== Object.keys(ld).length) return true;
+  return Object.entries(ld).some(([id, ts]) => rd[id] !== ts);
 }
 
 const PUSH_DEBOUNCE_MS = 1500;
@@ -94,22 +47,22 @@ const PULL_INTERVAL_MS = 60_000;
 
 export type EngineHooks = {
   readEnvelope: () => Snapshot;
-  writeMerged: (result: WriteMergedResult) => void;
+  writeMerged: (result: { items: LinkItem[]; deleted: Record<string, number> }) => void;
   setStatus: (status: SyncStatus) => void;
 };
 
-// 풀-기반 동기화: 변경·포커스·주기 타이머마다 전체 pull → LWW 병합 → dirty+tombstone push.
-// 항목 수가 적은 개인 앱이라 전체 조회로 충분하며, 오프라인/재시도에도 멱등이다.
+// 풀-기반 동기화: Drive 파일을 읽어 병합하고 달라졌으면 통째로 다시 쓴다.
+// 파일 단위 덮어쓰기여도 병합이 항목별 LWW라 경쟁 시에도 최신값으로 수렴한다
 export class SyncEngine {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private queued = false;
+  private fileId: string | null = null;
   private detachFns: (() => void)[] = [];
 
   constructor(
-    private client: SupabaseClient,
-    private userId: string,
+    private getToken: () => Promise<string | null>,
     private hooks: EngineHooks,
   ) {}
 
@@ -148,47 +101,19 @@ export class SyncEngine {
     this.running = true;
     this.hooks.setStatus("syncing");
     try {
+      const token = await this.getToken();
+      if (!token) throw new Error("no token");
       const env = this.hooks.readEnvelope();
-      const { data, error } = await this.client
-        .from("links")
-        .select(
-          "id,url,title,memo,tags,image,favicon,site_name,pinned,created_at,updated_at,deleted_at",
-        )
-        .eq("user_id", this.userId);
-      if (error) throw error;
-
-      const remote = (data ?? []) as RemoteRow[];
-      const remoteById = new Map(remote.map((r) => [r.id, r]));
-      const merged = mergeRemote(env.items, remote);
-      const mergedById = new Map(merged.map((i) => [i.id, i]));
-
-      // push 대상: 아직 로컬이 이기는 dirty 행 + 원격보다 새로운 tombstone
-      const pushItems = env.dirty.filter((id) => {
-        const local = mergedById.get(id);
-        if (!local) return false;
-        const row = remoteById.get(id);
-        if (!row) return true;
-        return local.updatedAt > Math.max(row.updated_at, row.deleted_at ?? 0);
-      });
-      const pushDeleted = Object.entries(env.deleted).filter(([id, ts]) => {
-        const row = remoteById.get(id);
-        return !row || ts > (row.deleted_at ?? row.updated_at);
-      });
-
-      const rows = [
-        ...pushItems.map((id) => toRow(this.userId, mergedById.get(id) as LinkItem, null)),
-        ...pushDeleted.map(([id, ts]) => tombstoneRow(this.userId, id, ts)),
-      ];
-      if (rows.length > 0) {
-        const { error: upErr } = await this.client.from("links").upsert(rows);
-        if (upErr) throw upErr;
+      const remote = await readRemoteFile(token);
+      if (remote) this.fileId = remote.id;
+      const merged = mergeSnapshot(env.items, env.deleted, remote?.snapshot ?? null);
+      if (snapshotDiffers(merged, remote?.snapshot ?? null)) {
+        this.fileId = await writeRemoteFile(token, this.fileId, {
+          items: merged.items,
+          deleted: merged.deleted,
+        });
       }
-
-      this.hooks.writeMerged({
-        items: merged,
-        clearedDirty: new Set(pushItems),
-        clearedDeleted: new Set(pushDeleted.map(([id]) => id)),
-      });
+      this.hooks.writeMerged(merged);
       this.hooks.setStatus("synced");
     } catch {
       this.hooks.setStatus("error");

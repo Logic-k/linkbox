@@ -41,19 +41,18 @@ function isLinkItem(item: unknown): item is LinkItem {
 export type Snapshot = {
   rev: number;
   items: LinkItem[];
-  // 서버에 아직 밀어내지 않은 로컬 변경 id와 삭제 tombstone(id → 삭제 시각 ms)
-  dirty: string[];
+  // 삭제 tombstone(id → 삭제 시각 ms) — 다른 기기의 삭제 전파용으로 원격과 병합한다
   deleted: Record<string, number>;
 };
 
 function loadSnapshot(): Snapshot {
-  const empty: Snapshot = { rev: 0, items: [], dirty: [], deleted: {} };
+  const empty: Snapshot = { rev: 0, items: [], deleted: {} };
   if (typeof window === "undefined") return empty;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return empty;
     const parsed = JSON.parse(raw);
-    // 초기 포맷(배열)과 {rev, items, dirty, deleted} 스냅샷 포맷을 모두 읽는다
+    // 초기 포맷(배열)과 {rev, items, deleted} 스냅샷 포맷을 모두 읽는다
     const list = Array.isArray(parsed) ? parsed : parsed?.items;
     if (!Array.isArray(list)) return empty;
     const items = list
@@ -62,9 +61,6 @@ function loadSnapshot(): Snapshot {
     return {
       rev: typeof parsed?.rev === "number" ? parsed.rev : 0,
       items,
-      dirty: Array.isArray(parsed?.dirty)
-        ? parsed.dirty.filter((d: unknown) => typeof d === "string")
-        : [],
       deleted:
         parsed?.deleted && typeof parsed.deleted === "object" && !Array.isArray(parsed.deleted)
           ? (parsed.deleted as Record<string, number>)
@@ -95,8 +91,8 @@ type Mutation = { items: LinkItem[]; touched?: string[]; removed?: string[] };
 
 export type WriteMergedResult = {
   items: LinkItem[];
-  clearedDirty: Set<string>;
-  clearedDeleted: Set<string>;
+  // 원격과 병합된 tombstone(id → 삭제 시각 ms)
+  deleted: Record<string, number>;
 };
 
 export function useLinks() {
@@ -147,23 +143,12 @@ export function useLinks() {
       const base = snap.rev > revRef.current ? snap.items : items;
       const out = mutate(base);
       const liveIds = new Set(out.items.map((i) => i.id));
-      const dirty = new Set(snap.dirty);
       const deleted = { ...snap.deleted };
       for (const id of out.touched ?? []) {
-        if (liveIds.has(id)) {
-          dirty.add(id);
-          delete deleted[id];
-        }
+        if (liveIds.has(id)) delete deleted[id];
       }
-      for (const id of out.removed ?? []) {
-        dirty.delete(id);
-        deleted[id] = Date.now();
-      }
-      // items에 없는 id는 밀어낼 본문이 없으므로 dirty에서 정리 (tombstone 경로만 남음)
-      for (const id of dirty) {
-        if (!liveIds.has(id)) dirty.delete(id);
-      }
-      writeSnapshot({ rev: snap.rev + 1, items: out.items, dirty: [...dirty], deleted });
+      for (const id of out.removed ?? []) deleted[id] = Date.now();
+      writeSnapshot({ rev: snap.rev + 1, items: out.items, deleted });
       engineRef.current?.queue();
       return out.items;
     },
@@ -253,12 +238,15 @@ export function useLinks() {
   const writeMerged = useCallback(
     (result: WriteMergedResult) => {
       const snap = loadSnapshot();
-      const merged = mergeByUpdatedAt(result.items, snap.items);
-      const liveIds = new Set(merged.map((i) => i.id));
-      const dirty = snap.dirty.filter((id) => !result.clearedDirty.has(id) && liveIds.has(id));
       const deleted = { ...snap.deleted };
-      for (const id of result.clearedDeleted) delete deleted[id];
-      writeSnapshot({ rev: snap.rev + 1, items: merged, dirty, deleted });
+      for (const [id, ts] of Object.entries(result.deleted)) {
+        if (ts > (deleted[id] ?? 0)) deleted[id] = ts;
+      }
+      // tombstone이 항목보다 새로우면 제거 — 다른 기기의 삭제가 여기서 로컬에 전파된다
+      const merged = mergeByUpdatedAt(result.items, snap.items).filter(
+        (i) => (deleted[i.id] ?? 0) <= i.updatedAt,
+      );
+      writeSnapshot({ rev: snap.rev + 1, items: merged, deleted });
     },
     [writeSnapshot],
   );
@@ -271,7 +259,6 @@ export function useLinks() {
         return {
           rev: revRef.current,
           items: itemsRef.current,
-          dirty: snap.dirty,
           deleted: snap.deleted,
         };
       },
