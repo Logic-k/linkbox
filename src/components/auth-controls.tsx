@@ -62,7 +62,7 @@ export function AuthControls({
     <div className="auth-controls">
       <button type="button" className="sync-button" onClick={() => onOpenChange(!open)}>
         <StatusIcon size={15} className={syncStatus === "syncing" ? "spin" : undefined} />
-        {connected ? statusLabel : "GitHub 동기화"}
+        <span className="sync-label">{connected ? statusLabel : "GitHub 동기화"}</span>
       </button>
 
       {open && (
