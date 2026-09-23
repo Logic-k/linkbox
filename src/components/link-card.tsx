@@ -76,6 +76,7 @@ export function LinkCard({
                 setEditing(false);
               }
             }}
+            // biome-ignore lint/a11y/noAutofocus: 사용자가 직접 메모를 눌러 편집을 여는 흐름이라 포커스 이동이 자연스러움
             autoFocus
             rows={2}
           />

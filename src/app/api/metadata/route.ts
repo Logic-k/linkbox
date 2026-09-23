@@ -4,6 +4,8 @@ import { NextResponse } from "next/server";
 import { Agent, type Response as UndiciResponse, fetch as undiciFetch } from "undici";
 
 const FETCH_TIMEOUT_MS = 8000;
+// 리다이렉트 홉마다 개별 타임아웃을 주되 전체 예산으로 총 시간을 제한한다
+const REQUEST_BUDGET_MS = 20_000;
 const MAX_BYTES = 512 * 1024;
 const MAX_REDIRECTS = 5;
 
@@ -164,11 +166,16 @@ export async function GET(request: Request) {
 
   try {
     // 리다이렉트를 수동으로 따라가며 매 홉의 대상을 다시 검증한다
+    const budgetEnd = Date.now() + REQUEST_BUDGET_MS;
     let response: UndiciResponse | null = null;
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      const remaining = budgetEnd - Date.now();
+      if (remaining <= 0) {
+        return NextResponse.json({ error: "페이지 응답이 너무 느립니다" }, { status: 502 });
+      }
       const res = await undiciFetch(target, {
         dispatcher,
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        signal: AbortSignal.timeout(Math.min(FETCH_TIMEOUT_MS, remaining)),
         redirect: "manual",
         headers: {
           "user-agent":
@@ -186,6 +193,9 @@ export async function GET(request: Request) {
         const hopError = await validateTarget(nextUrl);
         if (hopError) return hopError;
         target = nextUrl;
+        // 따라가지 않는 응답의 본문/커넥션을 닫아 리소스 누수를 막는다
+        const cancel = res.body?.cancel();
+        if (cancel) await cancel.catch(() => {});
         continue;
       }
       response = res;
@@ -201,7 +211,7 @@ export async function GET(request: Request) {
       );
     }
     const contentType = response.headers.get("content-type") ?? "";
-    if (contentType && !contentType.includes("html")) {
+    if (contentType && !contentType.toLowerCase().includes("html")) {
       return NextResponse.json({ error: "웹페이지가 아닌 링크입니다" }, { status: 502 });
     }
 

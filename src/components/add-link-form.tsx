@@ -127,6 +127,7 @@ export function AddLinkForm({
         value={url}
         onChange={(e) => setUrl(e.target.value)}
         autoComplete="off"
+        // biome-ignore lint/a11y/noAutofocus: 이 입력이 앱의 유일한 시작점이라 로드 시 포커스가 의도된 동작
         autoFocus
       />
 
