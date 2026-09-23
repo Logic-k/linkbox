@@ -404,6 +404,47 @@ button {
     padding: 14px 12px 60px;
   }
 
+  .app-header {
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+
+  .app-title {
+    gap: 8px;
+    font-size: 18px;
+    white-space: nowrap;
+    min-width: 0;
+    flex-shrink: 1;
+    overflow: hidden;
+  }
+
+  .app-title .logo {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+  }
+
+  .count {
+    font-size: 12px;
+  }
+
+  .header-actions {
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .sync-label {
+    display: none;
+  }
+
+  .sync-button {
+    padding: 0 9px;
+  }
+
+  .auth-popover {
+    width: min(240px, calc(100vw - 24px));
+  }
+
   .thumb {
     width: 46px;
     height: 46px;
@@ -415,6 +456,18 @@ button {
 
   .primary-btn {
     padding: 10px;
+  }
+
+  .sync-prompt {
+    flex-wrap: wrap;
+  }
+
+  .sync-prompt-actions {
+    width: 100%;
+  }
+
+  .sync-prompt-actions .auth-action {
+    flex: 1;
   }
 }
 
