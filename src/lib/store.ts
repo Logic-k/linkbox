@@ -62,9 +62,10 @@ function loadSnapshot(): Snapshot {
     return {
       rev: typeof parsed?.rev === "number" ? parsed.rev : 0,
       items,
+      // 레거시 포맷(dirty 필드 없음)은 전체를 미전송으로 간주해 첫 로그인 때 모두 올린다
       dirty: Array.isArray(parsed?.dirty)
         ? parsed.dirty.filter((d: unknown) => typeof d === "string")
-        : [],
+        : items.map((i) => i.id),
       deleted:
         parsed?.deleted && typeof parsed.deleted === "object" && !Array.isArray(parsed.deleted)
           ? (parsed.deleted as Record<string, number>)
@@ -95,8 +96,11 @@ type Mutation = { items: LinkItem[]; touched?: string[]; removed?: string[] };
 
 export type WriteMergedResult = {
   items: LinkItem[];
-  clearedDirty: Set<string>;
-  clearedDeleted: Set<string>;
+  // 원격에서 관측한 tombstone(id → 삭제 시각 ms)
+  tombstones: Record<string, number>;
+  // 서버에 실제로 반영된 push(id → 밀어낸 시각 ms) — 그보다 새로운 로컬 버전은 유지
+  clearedDirty: Record<string, number>;
+  clearedDeleted: Record<string, number>;
 };
 
 export function useLinks() {
@@ -253,11 +257,24 @@ export function useLinks() {
   const writeMerged = useCallback(
     (result: WriteMergedResult) => {
       const snap = loadSnapshot();
-      const merged = mergeByUpdatedAt(result.items, snap.items);
-      const liveIds = new Set(merged.map((i) => i.id));
-      const dirty = snap.dirty.filter((id) => !result.clearedDirty.has(id) && liveIds.has(id));
       const deleted = { ...snap.deleted };
-      for (const id of result.clearedDeleted) delete deleted[id];
+      for (const [id, ts] of Object.entries(result.tombstones)) {
+        if (ts > (deleted[id] ?? 0)) deleted[id] = ts;
+      }
+      for (const [id, pushedTs] of Object.entries(result.clearedDeleted)) {
+        if ((deleted[id] ?? 0) <= pushedTs) delete deleted[id];
+      }
+      // tombstone이 항목보다 새로우면 제거 — 다른 기기의 삭제가 여기서 로컬에 전파된다
+      const merged = mergeByUpdatedAt(result.items, snap.items).filter(
+        (i) => (deleted[i.id] ?? 0) <= i.updatedAt,
+      );
+      const byId = new Map(merged.map((i) => [i.id, i]));
+      const dirty = snap.dirty.filter((id) => {
+        const local = byId.get(id);
+        if (!local) return false;
+        const pushedTs = result.clearedDirty[id];
+        return pushedTs === undefined || local.updatedAt > pushedTs;
+      });
       writeSnapshot({ rev: snap.rev + 1, items: merged, dirty, deleted });
     },
     [writeSnapshot],

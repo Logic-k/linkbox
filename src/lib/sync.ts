@@ -71,12 +71,18 @@ function toItem(row: RemoteRow): LinkItem {
 }
 
 // last-write-wins 병합: 같은 id는 updatedAt이 큰 쪽을 채택하고,
-// 원격 tombstone이 로컬보다 새로우면 로컬에서도 제거한다
-function mergeRemote(local: LinkItem[], remote: RemoteRow[]): LinkItem[] {
+// 원격 tombstone이 로컬보다 새로우면 로컬에서도 제거한다.
+// 관측된 tombstone은 별도로 돌려줘 writeMerged가 로컬 장부에도 기록하게 한다
+function mergeRemote(
+  local: LinkItem[],
+  remote: RemoteRow[],
+): { items: LinkItem[]; tombstones: Record<string, number> } {
   const byId = new Map(local.map((i) => [i.id, i]));
+  const tombstones: Record<string, number> = {};
   for (const row of remote) {
     const l = byId.get(row.id);
     const remoteTs = Math.max(row.updated_at, row.deleted_at ?? 0);
+    if (row.deleted_at !== null) tombstones[row.id] = row.deleted_at;
     if (!l) {
       if (row.deleted_at === null) byId.set(row.id, toItem(row));
       continue;
@@ -86,7 +92,7 @@ function mergeRemote(local: LinkItem[], remote: RemoteRow[]): LinkItem[] {
       else byId.delete(row.id);
     }
   }
-  return [...byId.values()];
+  return { items: [...byId.values()], tombstones };
 }
 
 const PUSH_DEBOUNCE_MS = 1500;
@@ -159,7 +165,7 @@ export class SyncEngine {
 
       const remote = (data ?? []) as RemoteRow[];
       const remoteById = new Map(remote.map((r) => [r.id, r]));
-      const merged = mergeRemote(env.items, remote);
+      const { items: merged, tombstones } = mergeRemote(env.items, remote);
       const mergedById = new Map(merged.map((i) => [i.id, i]));
 
       // push 대상: 아직 로컬이 이기는 dirty 행 + 원격보다 새로운 tombstone
@@ -179,15 +185,42 @@ export class SyncEngine {
         ...pushItems.map((id) => toRow(this.userId, mergedById.get(id) as LinkItem, null)),
         ...pushDeleted.map(([id, ts]) => tombstoneRow(this.userId, id, ts)),
       ];
+
+      const clearedDirty: Record<string, number> = {};
+      const clearedDeleted: Record<string, number> = {};
       if (rows.length > 0) {
         const { error: upErr } = await this.client.from("links").upsert(rows);
         if (upErr) throw upErr;
+
+        // upsert는 조건부 쓰기가 안 되므로 쓴 뒤 재조회해 실제 승자를 확인한다.
+        // 서버가 더 오래된 값을 갖고 있으면 다른 기기가 덮어쓴 것 — dirty를
+        // 유지해 다음 tick이 최신 로컬 값을 다시 밀어 LWW로 수렴시킨다
+        const pushedIds = rows.map((r) => r.id);
+        const { data: after, error: afterErr } = await this.client
+          .from("links")
+          .select("id,updated_at,deleted_at")
+          .eq("user_id", this.userId)
+          .in("id", pushedIds);
+        if (afterErr) throw afterErr;
+        const afterById = new Map(((after ?? []) as RemoteRow[]).map((r) => [r.id, r]));
+        for (const id of pushItems) {
+          const local = mergedById.get(id) as LinkItem;
+          const srv = afterById.get(id);
+          if (srv && Math.max(srv.updated_at, srv.deleted_at ?? 0) >= local.updatedAt) {
+            clearedDirty[id] = local.updatedAt;
+          }
+        }
+        for (const [id, ts] of pushDeleted) {
+          const srv = afterById.get(id);
+          if (srv && (srv.deleted_at ?? 0) >= ts) clearedDeleted[id] = ts;
+        }
       }
 
       this.hooks.writeMerged({
         items: merged,
-        clearedDirty: new Set(pushItems),
-        clearedDeleted: new Set(pushDeleted.map(([id]) => id)),
+        tombstones,
+        clearedDirty,
+        clearedDeleted,
       });
       this.hooks.setStatus("synced");
     } catch {
