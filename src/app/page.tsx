@@ -1,11 +1,15 @@
 "use client";
 
+import type { Session } from "@supabase/supabase-js";
 import { Download, Link2, Search, Upload } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { AddLinkForm } from "@/components/add-link-form";
+import { AuthControls } from "@/components/auth-controls";
 import { LinkCard } from "@/components/link-card";
 import { exportJson, parseImport, useLinks } from "@/lib/store";
+import { supabase } from "@/lib/supabase";
+import { SyncEngine } from "@/lib/sync";
 
 function sharedUrlFrom(params: URLSearchParams): string {
   for (const key of ["url", "text", "title"]) {
@@ -26,6 +30,9 @@ function Home() {
     hydrated,
     allTags,
     storageError,
+    syncStatus,
+    engineHooks,
+    attachEngine,
     add,
     remove,
     togglePin,
@@ -34,7 +41,29 @@ function Home() {
   } = useLinks();
   const [query, setQuery] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // 세션 추적 + 로그인 시 SyncEngine 장착. 로그아웃하면 로컬 데이터는 그대로 두고
+  // 로컬 전용 모드로 돌아간다
+  useEffect(() => {
+    if (!supabase) return;
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!supabase || !session) {
+      attachEngine(null);
+      return;
+    }
+    const engine = new SyncEngine(supabase, session.user.id, engineHooks);
+    attachEngine(engine);
+    engine.start();
+    return () => engine.detach();
+  }, [session, engineHooks, attachEngine]);
 
   useEffect(() => {
     if (activeTag && !allTags.includes(activeTag)) setActiveTag(null);
@@ -82,6 +111,7 @@ function Home() {
           <span className="count">{hydrated ? `${items.length}개` : ""}</span>
         </h1>
         <div className="header-actions">
+          <AuthControls session={session} syncStatus={syncStatus} />
           <button type="button" className="icon-btn" onClick={doExport} title="JSON 내보내기">
             <Download size={16} />
           </button>
