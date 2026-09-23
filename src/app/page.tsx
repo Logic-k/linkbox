@@ -45,12 +45,34 @@ function Home() {
   const [connected, setConnected] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
+  const [syncPromptDismissed, setSyncPromptDismissed] = useState(true);
+  const [connecting, setConnecting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const driveSession = useMemo(
     () => (GOOGLE_CLIENT_ID ? new DriveSession(GOOGLE_CLIENT_ID) : null),
     [],
   );
+
+  const SYNC_PROMPT_KEY = "linkbox:sync-prompt:v1";
+
+  // "나중에"를 누른 적 있으면 첫 접속 안내를 다시 띄우지 않는다
+  useEffect(() => {
+    setSyncPromptDismissed(localStorage.getItem(SYNC_PROMPT_KEY) === "1");
+  }, []);
+
+  const connectDrive = async () => {
+    if (!driveSession) return;
+    setConnecting(true);
+    const ok = await driveSession.signIn();
+    setConnecting(false);
+    if (ok) setConnected(true);
+  };
+
+  const dismissSyncPrompt = () => {
+    localStorage.setItem(SYNC_PROMPT_KEY, "1");
+    setSyncPromptDismissed(true);
+  };
 
   // 이전에 동의한 세션이면 팝업 없이 조용히 연결을 복원한다
   useEffect(() => {
@@ -178,6 +200,28 @@ function Home() {
           />
         </div>
       </header>
+
+      {driveSession && !connected && !syncPromptDismissed && (
+        <div className="sync-prompt">
+          <p className="sync-prompt-text">
+            폰·PC에서 같은 링크를 보려면 Google Drive에 연결하세요. 이후 저장은 자동으로
+            동기화됩니다.
+          </p>
+          <div className="sync-prompt-actions">
+            <button
+              type="button"
+              className="auth-action"
+              onClick={connectDrive}
+              disabled={connecting}
+            >
+              {connecting ? "연결 중…" : "Google로 연결하기"}
+            </button>
+            <button type="button" className="auth-action ghost" onClick={dismissSyncPrompt}>
+              나중에
+            </button>
+          </div>
+        </div>
+      )}
 
       {importOpen && (
         <div className="paste-backdrop">

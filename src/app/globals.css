@@ -586,3 +586,30 @@ button {
   background: transparent;
   cursor: default;
 }
+
+.sync-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.sync-prompt-text {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+  flex: 1;
+  min-width: 200px;
+}
+
+.sync-prompt-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
