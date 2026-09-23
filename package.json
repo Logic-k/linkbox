@@ -12,6 +12,7 @@
     "format": "biome check --write ."
   },
   "dependencies": {
+    "@supabase/supabase-js": "2.116.0",
     "lucide-react": "^0.561.0",
     "next": "^16.2.9",
     "react": "^19.2.3",
